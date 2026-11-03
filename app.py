@@ -2,7 +2,7 @@
 App de Streamlit: timelapse de lluvias y El Niño en el Perú.
 
 El timelapse interactivo es un componente HTML (componente/timelapse.html) que recibe los datos de la carpeta
-datos/ (los arma scripts/06_timelapse_lluvia_enso.py). Si hay MP4 en videos/, se muestran en su pestaña.
+datos/ (los arma scripts/06_timelapse_lluvia_enso.py).
 
 Uso local:
     pip install -r requirements.txt
@@ -43,18 +43,10 @@ st.markdown(
     f"Lluvia hasta {con_lluvia.mes.iloc[-1]}; índices hasta {ind.mes.iloc[-1]}."
 )
 
-tab_tl, tab_video, tab_datos = st.tabs(["Timelapse", "Videos", "Datos y método"])
+tab_tl, tab_datos = st.tabs(["Timelapse", "Datos y método"])
 
 with tab_tl:
     st.iframe(pagina(), height="content")
-
-with tab_video:
-    videos = sorted((BASE / "videos").glob("*.mp4"))
-    if not videos:
-        st.info("Todavía no hay videos en la carpeta videos/. Se generan con scripts/07_video_timelapse.py.")
-    for v in videos:
-        st.subheader("Todos los meses" if "mensual" in v.stem else "Solo temporadas feb–abr")
-        st.video(str(v))
 
 with tab_datos:
     st.subheader("Cómo se calcula")
