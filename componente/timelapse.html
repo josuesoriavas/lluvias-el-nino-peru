@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Timelapse de lluvias y El Niño</title>
+<style>
+  /* Mapa animado a la izquierda, lectura del mes a la derecha; debajo, la serie ICEN/RONI que también sirve para navegar */
+  :root {
+    --bg: #ffffff; --panel: #ffffff; --fg: #1d2125; --muted: #5f6b76; --line: #dfe3e6; --grid: #eef0f2; --ref: #9aa3ab;
+    --evento: #f2a541; --icen: #b8336a; --roni: #3d5a80; --sin-dato: #dcdfe2; --pop: #ffffff;
+    --sans: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+    --serif: Georgia, "Times New Roman", serif;
+    --r: 8px;
+    color-scheme: light;      /* la app usa el tema claro de Streamlit (.streamlit/config.toml) */
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 15px; }
+  .tl { container-type: inline-size; display: grid; gap: 20px; padding: 4px 2px 16px; }
+  .card { display: grid; gap: 14px; min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 18px; }
+  .card h2 { margin: 0; font-size: 17px; font-weight: 600; text-wrap: balance; }
+  .nota { margin: 0; max-width: 80ch; color: var(--muted); font-size: 13px; line-height: 1.45; }
+  .ceja { color: var(--muted); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; }
+
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  @container (min-width: 720px) { .grid { grid-template-columns: minmax(0, 1.25fr) minmax(250px, 1fr); align-items: start; } }
+  .mapa-caja { position: relative; min-width: 0; }
+  canvas { display: block; width: 100%; }
+  .sin-lluvia { position: absolute; left: 10px; right: 10px; bottom: 10px; margin: 0; padding: 6px 10px; background: var(--pop); border: 1px solid var(--line); border-radius: var(--r); font-size: 13px; }
+
+  .lado { display: grid; gap: 16px; align-content: start; min-width: 0; }
+  .cuando { display: grid; gap: 4px; }
+  .mes { font-family: var(--serif); font-size: clamp(34px, 6cqi, 52px); line-height: 1.05; font-variant-numeric: tabular-nums; }
+  .estado { display: grid; gap: 6px; }
+  .ev { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: .35em; }
+  .ev .punto { align-self: center; width: 10px; height: 10px; border-radius: 50%; background: var(--evento); }
+  .ev-no { color: var(--muted); }
+  .ev b { font-weight: 600; }
+  .clave { justify-self: start; margin: 0; padding: 2px 10px; border: 1px solid var(--fg); border-radius: 999px; font-size: 12px; font-weight: 600; letter-spacing: .04em; }
+  .cifras { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; margin: 0; }
+  .cifra { display: grid; gap: 2px; padding-top: 6px; border-top: 1px solid var(--line); min-width: 0; }
+  .cifra dt { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+  .cifra dd { margin: 0; font-family: var(--serif); font-size: 28px; font-variant-numeric: tabular-nums; }
+  .prov { font-family: var(--sans); font-size: 12px; color: var(--muted); }
+  .mu { display: inline-block; flex: none; width: 11px; height: 11px; border-radius: 2px; }
+  .mu-linea { height: 3px; width: 14px; }
+  .leyenda { display: grid; gap: 4px; }
+  .leyenda-palabras { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; }
+
+  .controles { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
+  .botones, .seg { display: flex; gap: 6px; }
+  button, select { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: var(--r); padding: 6px 12px; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--muted); }
+  button:disabled { opacity: .45; cursor: default; }
+  button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+  .principal { min-width: 132px; background: var(--fg); color: var(--bg); border-color: var(--fg); font-weight: 600; }
+  .principal:hover:not(:disabled) { border-color: var(--fg); opacity: .88; }
+  [aria-pressed="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+  .vel { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+  input[type=range] { width: 100%; margin: 0; accent-color: var(--fg); }
+  .saltos { display: grid; gap: 6px; }
+  .saltos-lista { display: flex; flex-wrap: wrap; gap: 6px; }
+
+  .grafico { position: relative; }
+  svg { display: block; touch-action: pan-y; font-family: var(--sans); }
+  .tick { fill: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .rejilla { stroke: var(--grid); }
+  .eje { stroke: var(--line); }
+  .ref { stroke: var(--ref); }
+  .banda { fill: var(--evento); fill-opacity: .14; }
+  .banda.fuerte { fill-opacity: .32; }
+  .banda.curso { stroke: var(--evento); stroke-dasharray: 3 3; }
+  .evlab { fill: var(--fg); font-size: 12px; font-weight: 600; }
+  .marca { fill: var(--fg); }
+  .linea { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .linea.prov { stroke-dasharray: 2 4; }
+  .finlab { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .panlab { fill: var(--muted); font-size: 12px; paint-order: stroke; stroke: var(--panel); stroke-width: 3px; stroke-linejoin: round; }
+  .cursor line { stroke: var(--fg); stroke-width: 1.5; }
+  .cursor circle { stroke: var(--panel); stroke-width: 2; }
+  .capa { fill: transparent; cursor: pointer; }
+
+  .tip { position: absolute; z-index: 2; max-width: 250px; pointer-events: none; background: var(--pop); border: 1px solid var(--line); border-radius: var(--r); box-shadow: 0 4px 16px rgba(0,0,0,.14); padding: 6px 10px; font-size: 12.5px; display: grid; gap: 2px; }
+  .tip .sec { color: var(--muted); }
+  .tip .fila { display: flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
+  .tip b { font-weight: 600; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="tl">
+  <section class="card">
+    <h2>Lluvia de los últimos tres meses por distrito</h2>
+    <div class="grid">
+      <div class="mapa-caja">
+        <canvas id="mapa" role="img" aria-label="Mapa del índice de lluvia por distrito"></canvas>
+        <div class="tip" id="tip-mapa" hidden><b id="tip-nom"></b><span class="sec" id="tip-lug"></span><span class="fila"><span class="mu" id="tip-mu"></span><span id="tip-val"></span></span></div>
+        <p class="sin-lluvia" id="sin-lluvia" hidden>Todavía no hay lluvia PISCO para este mes: el mapa queda en gris y solo avanzan los índices.</p>
+      </div>
+      <div class="lado">
+        <div class="cuando"><span class="ceja">Lluvia acumulada de</span><div class="mes" id="mes">—</div></div>
+        <div class="estado">
+          <p class="ev" id="ev-si" hidden><span class="punto"></span>El Niño costero <b id="ev-etiqueta">—</b><span>·</span><span id="ev-magnitud">—</span></p>
+          <p class="ev ev-no" id="ev-no" hidden>Fuera de un evento El Niño costero</p>
+          <p class="clave" id="clave" hidden>TEMPORADA CLAVE</p>
+        </div>
+        <dl class="cifras">
+          <div class="cifra"><dt><span class="mu mu-linea" style="background: var(--icen)"></span>ICEN del mes</dt><dd><span id="v-icen">—</span> <span class="prov" id="prov" hidden>provisional</span></dd></div>
+          <div class="cifra"><dt><span class="mu mu-linea" style="background: var(--roni)"></span>RONI del mes</dt><dd id="v-roni">—</dd></div>
+          <div class="cifra"><dt><span class="mu" id="mu-humedo"></span>Distritos muy húmedos</dt><dd id="v-humedo">—</dd></div>
+          <div class="cifra"><dt><span class="mu" id="mu-seco"></span>Distritos muy secos</dt><dd id="v-seco">—</dd></div>
+        </dl>
+        <div class="leyenda">
+          <span class="ceja">Índice de lluvia (desviaciones de lo normal)</span>
+          <div id="leyenda"></div>
+          <div class="leyenda-palabras"><span>Más seco</span><span>Normal</span><span>Más húmedo</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="controles">
+      <div class="botones">
+        <button type="button" class="principal" id="play">▶ Reproducir</button>
+        <button type="button" class="principal" id="pausa" hidden>❚❚ Pausar</button>
+        <button type="button" id="ant" aria-label="Mes anterior">‹</button>
+        <button type="button" id="sig" aria-label="Mes siguiente">›</button>
+      </div>
+      <div class="seg" role="group" aria-label="Meses del timelapse">
+        <button type="button" class="modo" data-modo="mensual" aria-pressed="true">Todos los meses</button>
+        <button type="button" class="modo" data-modo="febabr" aria-pressed="false">Solo feb–abr</button>
+      </div>
+      <label class="vel" for="vel">Velocidad
+        <select id="vel"><option value="3">Lenta</option><option value="7" selected>Normal</option><option value="14">Rápida</option></select>
+      </label>
+    </div>
+    <input type="range" id="rango" min="0" max="0" value="0" aria-label="Mes del timelapse">
+    <div class="saltos"><span class="ceja">Ir a las temporadas clave (feb–abr)</span><div class="saltos-lista" id="saltos"></div></div>
+  </section>
+
+  <section class="card">
+    <h2>ICEN, RONI y lluvia en todo el país</h2>
+    <p class="nota">Franjas naranjas: eventos El Niño costero de la lista oficial del IGP/ENFEN (más intensas si fueron fuertes o extraordinarios; con borde punteado, el evento en curso). Marcas oscuras arriba: temporadas clave. Abajo, el porcentaje de distritos muy húmedos (verde) y muy secos (marrón). Haz clic o arrastra sobre el gráfico para ir a ese mes.</p>
+    <div class="grafico" id="grafico"><svg id="svg" width="100%"></svg><div class="tip" id="tip-graf" hidden></div></div>
+  </section>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+<script>const DATOS = __DATOS__;</script>
+<script>
+(() => {
+  const LIM = 2, ABC = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_', CERO = 31, PASO = 10;
+  const MES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+  const BRBG = ['#543005', '#8c510a', '#bf812d', '#dfc27d', '#f6e8c3', '#f5f5f5', '#c7eae5', '#80cdc1', '#35978f', '#01665e', '#003c30'];
+  const rampa = d3.scaleLinear(BRBG.map((_, i) => -LIM + (2 * LIM * i) / (BRBG.length - 1)), BRBG).interpolate(d3.interpolateRgb).clamp(true);
+  const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+  const $ = (id) => document.getElementById(id);
+  const fmt2 = d3.format('+.2f'), fmt1 = d3.format('.1f');
+  const num = (v) => (v === null || v === undefined || v === '' ? null : +v);
+  const mi = (mes) => +mes.slice(0, 4) * 12 + (+mes.slice(5, 7) - 1);
+  const ventana = (mes) => {
+    const k = mi(mes), a = k - 2, ya = Math.floor(a / 12), yk = Math.floor(k / 12);
+    return ya === yk ? `${MES[a % 12]}–${MES[k % 12]} ${yk}` : `${MES[a % 12]} ${ya}–${MES[k % 12]} ${yk}`;
+  };
+  const fecha = (mes) => new Date(Date.UTC(+mes.slice(0, 4), +mes.slice(5, 7) - 1, 1));
+  const mas = (t, n) => new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() + n, 1));
+
+  // --- Datos ---------------------------------------------------------------------------
+  const filas = DATOS.indices.map((r) => ({
+    mes: r.mes, t: fecha(r.mes), icen: num(r.icen), prov: !!r.icen_provisional, roni: num(r.roni),
+    hum: num(r.pct_muy_humedo), sec: num(r.pct_muy_seco), evento: r.evento, clave: !!r.temporada_clave,
+  }));
+  const porMes = new Map(filas.map((r) => [r.mes, r]));
+  const eventos = new Map(DATOS.eventos.map((e) => [e.id, { ...e, a: fecha(e.inicio), b: mas(fecha(e.fin), 1), fuerte: /Fuerte|Extraordinario|curso/.test(e.magnitud), curso: /curso/.test(e.magnitud) }]));
+  const formas = new Map(DATOS.limites.map((r) => [r.ubigeo, r]));
+  const distritos = DATOS.lluvia.filter((r) => formas.has(r.ubigeo)).map((r) => {
+    const f = formas.get(r.ubigeo);
+    return { r, path: new Path2D(f.trazo), x0: f.x0, y0: f.y0, x1: f.x1, y1: f.y1, cod: r.indice_3m, desde: mi(r.desde) };
+  });
+  const ext = { x0: d3.min(distritos, (q) => q.x0), y0: d3.min(distritos, (q) => q.y0), x1: d3.max(distritos, (q) => q.x1), y1: d3.max(distritos, (q) => q.y1) };
+  const codigo = new Int16Array(128).fill(-1);
+  [...ABC].forEach((c, i) => { codigo[c.charCodeAt(0)] = i; });
+  const paleta = d3.range(ABC.length).map((i) => rampa((i - CERO) / PASO));
+  $('mu-humedo').style.background = rampa(1.4);
+  $('mu-seco').style.background = rampa(-1.4);
+
+  // --- Estado y reproducción ------------------------------------------------------------
+  const est = { mes: (filas.find((r) => r.clave) || filas[0]).mes, modo: 'mensual', fps: 7, timer: null };
+  const frames = () => (est.modo === 'febabr' ? filas.filter((r) => r.mes.endsWith('-04') && r.hum !== null) : filas);
+  const idx = () => Math.max(0, frames().findIndex((r) => r.mes === est.mes));
+  const ir = (mes) => {
+    const k = mi(mes);
+    est.mes = d3.least(frames(), (r) => Math.abs(mi(r.mes) - k)).mes;
+    actualizar();
+  };
+  const pausar = () => { clearInterval(est.timer); est.timer = null; botones(); };
+  const paso = (d) => {
+    const fr = frames(), i = idx() + d;
+    if (i < 0 || i >= fr.length) { if (d > 0) pausar(); return; }
+    ir(fr[i].mes);
+    if (d > 0 && i === fr.length - 1) pausar();
+  };
+  const reproducir = () => {
+    const fr = frames();
+    if (idx() >= fr.length - 1) ir(fr[0].mes);
+    clearInterval(est.timer);
+    est.timer = setInterval(() => paso(1), 1000 / est.fps);
+    botones();
+  };
+  const botones = () => {
+    const fr = frames(), i = idx();
+    $('play').hidden = !!est.timer;
+    $('pausa').hidden = !est.timer;
+    $('ant').disabled = i <= 0;
+    $('sig').disabled = i >= fr.length - 1;
+    document.querySelectorAll('.modo').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.modo === est.modo)));
+    document.querySelectorAll('#saltos button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mes === est.mes)));
+  };
+
+  $('play').addEventListener('click', reproducir);
+  $('pausa').addEventListener('click', pausar);
+  $('ant').addEventListener('click', () => { pausar(); paso(-1); });
+  $('sig').addEventListener('click', () => { pausar(); paso(1); });
+  document.querySelectorAll('.modo').forEach((b) => b.addEventListener('click', () => { est.modo = b.dataset.modo; ir(est.mes); if (est.timer) reproducir(); }));
+  $('vel').addEventListener('change', (e) => { est.fps = +e.target.value; if (est.timer) reproducir(); });
+  $('rango').addEventListener('input', (e) => { pausar(); const r = frames()[+e.target.value]; if (r) ir(r.mes); });
+  for (const r of filas.filter((d) => d.clave)) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.dataset.mes = r.mes;
+    b.textContent = r.mes.slice(0, 4);
+    b.setAttribute('aria-label', 'Ir a ' + ventana(r.mes));
+    b.addEventListener('click', () => { pausar(); ir(r.mes); });
+    $('saltos').append(b);
+  }
+
+  // --- Lectura del mes -------------------------------------------------------------------
+  function lectura() {
+    const r = porMes.get(est.mes), e = r.evento ? eventos.get(r.evento) : null;
+    $('mes').textContent = ventana(r.mes);
+    $('ev-si').hidden = !e;
+    $('ev-no').hidden = !!e;
+    if (e) { $('ev-etiqueta').textContent = e.etiqueta; $('ev-magnitud').textContent = e.magnitud; }
+    $('clave').hidden = !r.clave;
+    $('v-icen').textContent = r.icen === null ? '—' : fmt2(r.icen);
+    $('prov').hidden = !r.prov;
+    $('v-roni').textContent = r.roni === null ? '—' : fmt2(r.roni);
+    $('v-humedo').textContent = r.hum === null ? '—' : fmt1(r.hum) + ' %';
+    $('v-seco').textContent = r.sec === null ? '—' : fmt1(r.sec) + ' %';
+    $('sin-lluvia').hidden = r.hum !== null;
+    const fr = frames();
+    $('rango').max = String(fr.length - 1);
+    $('rango').value = String(idx());
+    $('rango').setAttribute('aria-valuetext', ventana(r.mes));
+  }
+
+  // --- Mapa -------------------------------------------------------------------------------
+  const cv = $('mapa'), hit = document.createElement('canvas').getContext('2d'), mapa = { t: null, hover: null };
+  const clase = (v) => (v >= 1 ? 'muy húmedo' : v >= 0.5 ? 'algo húmedo' : v > -0.5 ? 'cerca de lo normal' : v > -1 ? 'algo seco' : 'muy seco');
+  const valor = (q) => { const i = mi(est.mes) - q.desde; return i >= 0 && i < q.cod.length ? codigo[q.cod.charCodeAt(i)] : -1; };
+  function medirMapa() {
+    const W = cv.parentElement.clientWidth || 320, ew = ext.x1 - ext.x0, eh = ext.y1 - ext.y0;
+    const s = Math.min(W / ew, Math.max(320, Math.min(720, window.innerHeight * 0.85)) / eh), H = Math.ceil(eh * s), dpr = window.devicePixelRatio || 1;
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); cv.style.height = H + 'px';
+    mapa.t = { s, dpr, W, H, ox: (W - ew * s) / 2 - ext.x0 * s, oy: -ext.y0 * s };
+  }
+  function pintarMapa() {
+    const ctx = cv.getContext('2d'), { s, dpr, ox, oy } = mapa.t, gris = css('--sin-dato');
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    ctx.setTransform(s * dpr, 0, 0, s * dpr, ox * dpr, oy * dpr);
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 0.9 / s;
+    for (const q of distritos) {
+      const c = valor(q), col = c >= 0 ? paleta[c] : gris;
+      ctx.fillStyle = col; ctx.strokeStyle = col;
+      ctx.fill(q.path); ctx.stroke(q.path);
+    }
+    if (mapa.hover) { ctx.lineWidth = 2 / s; ctx.strokeStyle = css('--fg'); ctx.stroke(mapa.hover.q.path); etiquetaMapa(); }
+    cv.setAttribute('aria-label', 'Mapa del índice de lluvia por distrito, ' + ventana(est.mes));
+  }
+  function etiquetaMapa() {
+    const { q, px, py } = mapa.hover, c = valor(q), v = c >= 0 ? (c - CERO) / PASO : null, tip = $('tip-mapa');
+    $('tip-nom').textContent = q.r.distrito;
+    $('tip-lug').textContent = `${q.r.provincia}, ${q.r.departamento}`;
+    $('tip-val').textContent = v === null ? 'Sin dato de lluvia este mes' : `Índice ${d3.format('+.1f')(v)} · ${clase(v)}`;
+    $('tip-mu').style.background = v === null ? css('--sin-dato') : paleta[c];
+    tip.hidden = false;
+    let left = px + 14, top = py + 14;
+    if (left + tip.offsetWidth > mapa.t.W) left = px - tip.offsetWidth - 14;
+    if (top + tip.offsetHeight > mapa.t.H) top = py - tip.offsetHeight - 14;
+    tip.style.left = Math.max(0, left) + 'px';
+    tip.style.top = Math.max(0, top) + 'px';
+  }
+  cv.addEventListener('pointermove', (e) => {
+    const b = cv.getBoundingClientRect(), px = e.clientX - b.left, py = e.clientY - b.top;
+    const x = (px - mapa.t.ox) / mapa.t.s, y = (py - mapa.t.oy) / mapa.t.s;
+    const q = distritos.find((d) => x >= d.x0 && x <= d.x1 && y >= d.y0 && y <= d.y1 && hit.isPointInPath(d.path, x, y));
+    const antes = mapa.hover && mapa.hover.q;
+    mapa.hover = q ? { q, px, py } : null;
+    if (!q) $('tip-mapa').hidden = true;
+    if ((q || null) !== (antes || null)) pintarMapa(); else if (q) etiquetaMapa();
+  });
+  cv.addEventListener('pointerleave', () => { mapa.hover = null; $('tip-mapa').hidden = true; pintarMapa(); });
+
+  // --- Leyenda ----------------------------------------------------------------------------
+  function leyenda() {
+    const el = $('leyenda'), w = Math.max(160, el.clientWidth), h = 30;
+    const svg = d3.create('svg').attr('width', '100%').attr('height', h).attr('viewBox', `0 0 ${w} ${h}`);
+    const g = svg.append('defs').append('linearGradient').attr('id', 'grad');
+    d3.range(0, 1.0001, 0.05).forEach((t) => g.append('stop').attr('offset', t).attr('stop-color', rampa(-LIM + 2 * LIM * t)));
+    svg.append('rect').attr('width', w).attr('height', 12).attr('rx', 2).attr('fill', 'url(#grad)');
+    const x = d3.scaleLinear([-LIM, LIM], [0, w]);
+    d3.range(-LIM, LIM + 1).forEach((v) => svg.append('text').attr('class', 'tick').attr('x', x(v)).attr('y', 27)
+      .attr('text-anchor', v === -LIM ? 'start' : v === LIM ? 'end' : 'middle').text(v > 0 ? '+' + v : v < 0 ? '−' + -v : '0'));
+    el.replaceChildren(svg.node());
+  }
+
+  // --- Serie ICEN / RONI ------------------------------------------------------------------
+  const TOP = 30, H1 = 200, GAP = 16, H2 = 96, AX = 26, H = TOP + H1 + GAP + H2 + AX, graf = {};
+  const signo = (v) => (v > 0 ? '+' + v : v < 0 ? '−' + -v : '0');
+  function serie() {
+    const el = $('grafico'), W = Math.max(280, el.clientWidth), svg = d3.select('#svg');
+    const cI = css('--icen'), cR = css('--roni');
+    svg.selectAll('*').remove();
+    svg.attr('viewBox', `0 0 ${W} ${H}`).attr('height', H);
+    const ancho = (txt, cls) => { const t = svg.append('text').attr('class', cls).text(txt); const w = t.node().getComputedTextLength(); t.remove(); return w; };
+    const vals = filas.flatMap((r) => [r.icen, r.roni]).filter((v) => v !== null);
+    const y1 = d3.scaleLinear([Math.min(-2.5, d3.min(vals)), Math.max(4.5, d3.max(vals))], [TOP + H1, TOP]).nice();
+    const y2 = d3.scaleLinear([-(d3.max(filas, (r) => r.sec) || 1), d3.max(filas, (r) => r.hum) || 1], [TOP + H1 + GAP + H2, TOP + H1 + GAP]).nice();
+    const t1 = y1.ticks(4), t2 = y2.ticks(3).filter((v) => v !== 0);
+    const left = Math.ceil(d3.max([...t1.map(signo), ...t2.map((v) => Math.abs(v) + ' %')], (s) => ancho(s, 'tick'))) + 10;
+    const ultI = filas.filter((r) => r.icen !== null).at(-1), ultR = filas.filter((r) => r.roni !== null).at(-1);
+    const labI = 'ICEN ' + fmt2(ultI.icen), labR = 'RONI ' + fmt2(ultR.roni);
+    const right = Math.ceil(Math.max(ancho(labI, 'finlab'), ancho(labR, 'finlab'))) + 14;
+    const x = d3.scaleUtc([filas[0].t, mas(filas.at(-1).t, 1)], [left, W - right]);
+    const xc = (r) => (x(r.t) + x(mas(r.t, 1))) / 2, base = TOP + H1 + GAP + H2;
+
+    for (const e of eventos.values()) {
+      svg.append('rect').attr('class', 'banda' + (e.fuerte ? ' fuerte' : '') + (e.curso ? ' curso' : ''))
+        .attr('x', x(e.a)).attr('width', Math.max(1, x(e.b) - x(e.a))).attr('y', TOP).attr('height', H1 + GAP + H2);
+    }
+    let borde = Infinity;
+    for (const e of [...eventos.values()].filter((d) => d.fuerte).sort((a, b) => b.a - a.a)) {
+      const w = ancho(e.etiqueta, 'evlab'), cx = Math.min(W - w / 2, (x(e.a) + x(e.b)) / 2);
+      if (cx + w / 2 > borde - 6 || cx - w / 2 < 0) continue;
+      svg.append('text').attr('class', 'evlab').attr('x', cx).attr('y', 12).attr('text-anchor', 'middle').text(e.etiqueta);
+      borde = cx - w / 2;
+    }
+    for (const r of filas.filter((d) => d.clave)) {
+      const a = x(mas(r.t, -2)), b = x(mas(r.t, 1));
+      svg.append('rect').attr('class', 'marca').attr('x', a).attr('width', Math.max(2, b - a)).attr('y', 18).attr('height', 6).attr('rx', 1);
+    }
+    for (const v of t1) {
+      svg.append('line').attr('class', v === 0 ? 'ref' : 'rejilla').attr('x1', left).attr('x2', W - right).attr('y1', y1(v)).attr('y2', y1(v));
+      svg.append('text').attr('class', 'tick').attr('x', left - 6).attr('y', y1(v)).attr('dy', '0.32em').attr('text-anchor', 'end').text(signo(v));
+    }
+    for (const v of t2) {
+      svg.append('line').attr('class', 'rejilla').attr('x1', left).attr('x2', W - right).attr('y1', y2(v)).attr('y2', y2(v));
+      svg.append('text').attr('class', 'tick').attr('x', left - 6).attr('y', y2(v)).attr('dy', '0.32em').attr('text-anchor', 'end').text(Math.abs(v) + ' %');
+    }
+    const conLluvia = filas.filter((r) => r.hum !== null), anchoMes = (r) => Math.max(0.6, x(mas(r.t, 1)) - x(r.t) - 0.3);
+    svg.append('g').selectAll('rect').data(conLluvia).join('rect').attr('x', (r) => x(r.t)).attr('width', anchoMes)
+      .attr('y', (r) => y2(r.hum)).attr('height', (r) => y2(0) - y2(r.hum)).attr('fill', rampa(1.4));
+    svg.append('g').selectAll('rect').data(conLluvia).join('rect').attr('x', (r) => x(r.t)).attr('width', anchoMes)
+      .attr('y', y2(0)).attr('height', (r) => y2(-r.sec) - y2(0)).attr('fill', rampa(-1.4));
+    svg.append('line').attr('class', 'ref').attr('x1', left).attr('x2', W - right).attr('y1', y2(0)).attr('y2', y2(0));
+    svg.append('text').attr('class', 'panlab').attr('x', left + 6).attr('y', TOP + H1 + GAP + 12).text('Distritos muy húmedos');
+    svg.append('text').attr('class', 'panlab').attr('x', left + 6).attr('y', base - 6).text('Distritos muy secos');
+
+    const linea = (campo) => d3.line().defined((r) => r[campo] !== null).x(xc).y((r) => y1(r[campo]));
+    svg.append('path').datum(filas).attr('class', 'linea').attr('stroke', cR).attr('d', linea('roni'));
+    svg.append('path').datum(filas.map((r) => (r.prov ? { ...r, icen: null } : r))).attr('class', 'linea').attr('stroke', cI).attr('d', linea('icen'));
+    const iProv = filas.findIndex((r) => r.prov);
+    if (iProv > 0) svg.append('path').datum(filas.slice(iProv - 1).filter((r) => r.icen !== null)).attr('class', 'linea prov').attr('stroke', cI).attr('d', linea('icen'));
+    let yI = y1(ultI.icen), yR = y1(ultR.roni);
+    if (Math.abs(yI - yR) < 14) { const c = (yI + yR) / 2, s = yI <= yR ? -1 : 1; yI = c + s * 7; yR = c - s * 7; }
+    svg.append('text').attr('class', 'finlab').attr('x', xc(ultI) + 6).attr('y', yI).attr('dy', '0.32em').attr('fill', cI).text(labI);
+    svg.append('text').attr('class', 'finlab').attr('x', xc(ultR) + 6).attr('y', yR).attr('dy', '0.32em').attr('fill', cR).text(labR);
+
+    const ax = svg.append('g').attr('transform', `translate(0,${base})`)
+      .call(d3.axisBottom(x).ticks(Math.max(3, Math.floor((W - left - right) / 70))).tickFormat(d3.utcFormat('%Y')).tickSizeOuter(0));
+    ax.attr('font-size', null).attr('font-family', null);
+    ax.selectAll('path, line').attr('class', 'eje');
+    ax.selectAll('text').attr('class', 'tick');
+
+    graf.cur = svg.append('g').attr('class', 'cursor');
+    graf.cur.append('line').attr('y1', TOP - 6).attr('y2', base);
+    graf.dotR = graf.cur.append('circle').attr('r', 4).attr('fill', cR);
+    graf.dotI = graf.cur.append('circle').attr('r', 4).attr('fill', cI);
+    Object.assign(graf, { xc, y1 });
+
+    const enX = (px) => {
+      const t = x.invert(Math.max(left, Math.min(W - right - 0.01, px)));
+      return porMes.get(`${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, '0')}`) || filas.at(-1);
+    };
+    const tip = $('tip-graf');
+    const detalle = (r, e) => {
+      const d = d3.select(tip);
+      d.selectAll('*').remove();
+      d.append('span').attr('class', 'sec').text(`${MES[r.t.getUTCMonth()]} ${r.t.getUTCFullYear()}`);
+      for (const [c, k, v] of [
+        [cI, 'ICEN', r.icen === null ? '—' : fmt2(r.icen) + (r.prov ? ' (provisional)' : '')],
+        [cR, 'RONI', r.roni === null ? '—' : fmt2(r.roni)],
+        [rampa(1.4), 'Muy húmedos', r.hum === null ? 'sin dato' : fmt1(r.hum) + ' %'],
+        [rampa(-1.4), 'Muy secos', r.sec === null ? 'sin dato' : fmt1(r.sec) + ' %'],
+      ]) {
+        const f = d.append('div').attr('class', 'fila');
+        f.append('span').attr('class', 'mu').style('background', c);
+        f.append('span').text(k + ': ');
+        f.append('b').text(v);
+      }
+      tip.hidden = false;
+      const b = el.getBoundingClientRect(), px = e.clientX - b.left, py = e.clientY - b.top;
+      let l = px + 14;
+      if (l + tip.offsetWidth > b.width) l = px - tip.offsetWidth - 14;
+      tip.style.left = Math.max(0, l) + 'px';
+      tip.style.top = Math.max(0, Math.min(b.height - tip.offsetHeight, py - tip.offsetHeight / 2)) + 'px';
+    };
+    let arrastre = false;
+    const saltar = (e) => { pausar(); ir(enX(d3.pointer(e, svg.node())[0]).mes); };
+    svg.append('rect').attr('class', 'capa').attr('x', left).attr('y', 0).attr('width', W - right - left).attr('height', base)
+      .on('pointerdown', (e) => { arrastre = true; e.currentTarget.setPointerCapture(e.pointerId); saltar(e); })
+      .on('pointerup pointercancel', () => { arrastre = false; })
+      .on('pointermove', (e) => { if (arrastre) saltar(e); detalle(enX(d3.pointer(e, svg.node())[0]), e); })
+      .on('pointerleave', () => { tip.hidden = true; });
+  }
+  function cursor() {
+    const r = porMes.get(est.mes);
+    if (!graf.cur || !r) return;
+    graf.cur.attr('transform', `translate(${graf.xc(r)},0)`);
+    graf.dotI.attr('display', r.icen === null ? 'none' : null).attr('cy', r.icen === null ? 0 : graf.y1(r.icen));
+    graf.dotR.attr('display', r.roni === null ? 'none' : null).attr('cy', r.roni === null ? 0 : graf.y1(r.roni));
+  }
+
+  function actualizar() { lectura(); pintarMapa(); cursor(); botones(); }
+  function dibujarTodo() { medirMapa(); leyenda(); serie(); actualizar(); }
+  let ancho = 0;
+  new ResizeObserver(() => { const w = document.body.clientWidth; if (w !== ancho) { ancho = w; dibujarTodo(); } }).observe(document.body);
+})();
+</script>
+</body>
+</html>
